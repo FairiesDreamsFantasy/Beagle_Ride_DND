@@ -1,4 +1,4 @@
-name: Deploy Beagle Ride Adventure to Server
+name: Deploy Beagle Ride DND to Server
 
 on:
   push:
@@ -31,15 +31,3 @@ jobs:
           mkdir -p Public/Beagle_Ride_DND/Assets/JS Public/Beagle_Ride_DND/Assets/CSS
           cp -f dist/assets/*.js Public/Beagle_Ride_DND/Assets/JS/index.js || true
           cp -f dist/assets/*.css Public/Beagle_Ride_DND/Assets/CSS/style.css || true
-
-      # Uncomment and configure FTP or SSH secrets in GitHub repository settings to automate deployment to cPanel:
-      # Target path: /home/fairiesd/public_html/Arcade/Beagle_Ride_DND/
-      #
-      # - name: Deploy via FTP/SFTP
-      #   uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-      #   with:
-      #     server: ${{ secrets.FTP_SERVER }}
-      #     username: ${{ secrets.FTP_USERNAME }}
-      #     password: ${{ secrets.FTP_PASSWORD }}
-      #     local-dir: ./Public/Beagle_Ride_DND/
-      #     server-dir: /home/fairiesd/public_html/Arcade/Beagle_Ride_DND/

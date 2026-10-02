@@ -3,14 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  * 
  * System/Plugins/General/index.tsx
- * Ultra-Scientific Centralized System Plugins Suite
- * Protected under the 1999.999999999999% Hardening Mandate.
+ * Centralized System Plugins Suite
  */
 
 export interface SystemPluginDescriptor {
   id: string;
   name: string;
-  category: 'BUILD' | 'SECURITY' | 'AUDIO_DSP' | 'PHYSICS' | 'ACCESSIBILITY' | 'MEMORY';
+  category: 'BUILD' | 'AUDIO_DSP' | 'PHYSICS' | 'ACCESSIBILITY' | 'MEMORY';
   version: string;
   enabled: boolean;
   precision: string;
@@ -41,19 +40,7 @@ export const TailwindVitePluginDescriptor: SystemPluginDescriptor = {
 };
 
 /**
- * 3. Ring 1 Game Security Sentinel Plugin Engine.
- */
-export const GameSecuritySentinelPluginDescriptor: SystemPluginDescriptor = {
-  id: 'PLUGIN_SECURITY_SENTINEL',
-  name: 'gameSecuritySentinelPlugin',
-  category: 'SECURITY',
-  version: '1.0.0-PROD',
-  enabled: true,
-  precision: '200^1000%_HARDENING'
-};
-
-/**
- * 4. Real-Time Audio DSP Plugin Engine Manager.
+ * 3. Real-Time Audio DSP Plugin Engine Manager.
  */
 export class AudioDSPPluginEngine {
   public static readonly pluginId = 'PLUGIN_AUDIO_DSP';
@@ -72,7 +59,7 @@ export class AudioDSPPluginEngine {
 }
 
 /**
- * 5. Spatial Hash Grid Physics & Collision Plugin Engine Manager.
+ * 4. Spatial Hash Grid Physics & Collision Plugin Engine Manager.
  */
 export class PhysicsCollisionPluginEngine {
   public static readonly pluginId = 'PLUGIN_PHYSICS_COLLISION';
@@ -85,7 +72,7 @@ export class PhysicsCollisionPluginEngine {
 }
 
 /**
- * 6. Accessibility & Speech Synthesizer Plugin Engine Manager.
+ * 5. Accessibility & Speech Synthesizer Plugin Engine Manager.
  */
 export class AccessibilitySpeechPluginEngine {
   public static readonly pluginId = 'PLUGIN_ACCESSIBILITY_SPEECH';
@@ -106,7 +93,7 @@ export class AccessibilitySpeechPluginEngine {
 }
 
 /**
- * 7. Memory Safety Sentinel Plugin Manager (Zero-Allocation GC Guard).
+ * 6. Memory Safety Sentinel Plugin Manager (Zero-Allocation GC Guard).
  */
 export class MemorySafetySentinelPlugin {
   public static readonly pluginId = 'PLUGIN_MEMORY_SAFETY';
@@ -120,14 +107,13 @@ export class MemorySafetySentinelPlugin {
 }
 
 /**
- * 8. Master Centralized Plugins General Configuration Matrix.
+ * 7. Master Centralized Plugins General Configuration Matrix.
  */
 export const PluginsGeneralConfig = {
   version: '1.0.0-PLUGINS-CENTRAL',
   plugins: [
     ViteReactPluginDescriptor,
     TailwindVitePluginDescriptor,
-    GameSecuritySentinelPluginDescriptor,
     {
       id: AudioDSPPluginEngine.pluginId,
       name: 'AudioDSPPluginEngine',
