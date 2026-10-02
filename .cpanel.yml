@@ -3,6 +3,7 @@ deployment:
   tasks:
     - export DEPLOYPATH=/home/fairiesd/public_html/Arcade/Beagle-Ride-DND
     - export DEPLOYPATH_ALT=/home/fairiesd/public_html/Arcade/Beagle_Ride_DND
-    - /bin/mkdir -p $DEPLOYPATH $DEPLOYPATH_ALT
-    - /bin/cp -R Public/Beagle_Ride_DND/. $DEPLOYPATH
-    - /bin/cp -R Public/Beagle_Ride_DND/. $DEPLOYPATH_ALT
+    - /bin/mkdir -p $DEPLOYPATH
+    - /bin/mkdir -p $DEPLOYPATH_ALT
+    - /bin/cp -R Public/Beagle_Ride_DND/. $DEPLOYPATH/
+    - /bin/cp -R Public/Beagle_Ride_DND/. $DEPLOYPATH_ALT/
