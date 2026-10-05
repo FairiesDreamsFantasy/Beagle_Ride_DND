@@ -1,9 +1,10 @@
+# [LOCKED] DO NOT MODIFY THIS FILE WITHOUT EXPLICIT ARCHITECTURAL PERMISSION
 name: Deploy Beagle Ride DND to Server
 
 on:
   push:
     branches:
-      - main
+      - Stable
   workflow_dispatch:
 
 jobs:
