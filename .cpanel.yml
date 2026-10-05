@@ -1,6 +1,6 @@
+---
 # [LOCKED] DO NOT MODIFY THIS FILE WITHOUT EXPLICIT ARCHITECTURAL PERMISSION
 # cPanel Deployment Configuration - Beagle Ride DND
----
 deployment:
   tasks:
     - export DEPLOYPATH=/home/fairiesd/public_html/Arcade/Beagle-Ride-DND
