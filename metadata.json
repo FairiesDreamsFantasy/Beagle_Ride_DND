@@ -1,0 +1,8 @@
+{
+  "name": "Beagle Ride D\u0026D - Stable Edition",
+  "description": "A screen-reader supported, landscape-oriented 2-D POV adventure game where you ride an elegant beagle in a grand foyer.\n(Backed)",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
