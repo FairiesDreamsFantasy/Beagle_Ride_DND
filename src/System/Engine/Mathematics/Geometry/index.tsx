@@ -1,0 +1,1 @@
+/** @license SPDX-License-Identifier: Apache-2.0 */ export const GeometryModule = { calculateArea: (r: number): number => Math.PI * r * r, calculatePerimeter: (r: number): number => 2 * Math.PI * r };
