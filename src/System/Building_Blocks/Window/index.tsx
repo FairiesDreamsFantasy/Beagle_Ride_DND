@@ -1,0 +1,1 @@
+/** @license SPDX-License-Identifier: Apache-2.0 */ export const WindowPhysics = { mass: 1.0, friction: 0.5, collisionOpacity: 1.0, getPhysicalProperties: () => ({ mass: 1.0, friction: 0.5, collisionOpacity: 1.0 }) };

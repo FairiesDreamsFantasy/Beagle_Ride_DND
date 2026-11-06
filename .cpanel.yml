@@ -1,0 +1,7 @@
+---
+# [LOCKED] DO NOT MODIFY THIS FILE WITHOUT EXPLICIT ARCHITECTURAL PERMISSION
+# cPanel Deployment Configuration - Beagle Ride DND
+deployment:
+  tasks:
+    - /bin/mkdir -p /home/fairiesd/public_html/Arcade/Beagle_Ride_DND
+    - /bin/cp -R Public/Beagle_Ride_DND/. /home/fairiesd/public_html/Arcade/Beagle_Ride_DND/
