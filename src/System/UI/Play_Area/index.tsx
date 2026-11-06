@@ -24,6 +24,7 @@ import { BeagleRegistry, CharacterInteractionEngine } from '../../Registry/Chara
 import { RiderRegistry } from '../../Registry/Character/Rider/index';
 import { DefaultGameSettings, GameConfig } from '../../Registry/Config/index';
 import { ShadingLUT, ShadingColor32LUT, ReciprocalDyLUT } from '../../Engine/Mathematics/LUT/Shading';
+import { TrigLUT } from '../../Engine/Mathematics/LUT/Trig';
 import { MovementEngine } from '../../Engine/index';
 import { PhysicsEngine } from '../../Engine/Science/Physics/index';
 import { accessibilityGeneral } from '../../Accessibility/index';
@@ -537,7 +538,6 @@ export default function PlayArea({ onBack, selectedBeagle, selectedRider, settin
       state.currentAngle = ((state.currentAngle % 360) + 360) % 360;
 
       // 2. Physics & movement velocity updates
-      const rad = (state.currentAngle * Math.PI) / 180;
       let speedValue = state.isShiftPressed ? GameConfig.physics.gallopSpeed : GameConfig.physics.trotSpeed; // High-Fidelity Gallop vs Trot
       if (state.isBursting) {
         speedValue = GameConfig.physics.burstSpeed; // Precision navigation burst
@@ -567,8 +567,8 @@ export default function PlayArea({ onBack, selectedBeagle, selectedRider, settin
       };
 
       if (state.isMovingForward || state.isBursting) {
-        const dirX = Math.sin(rad);
-        const dirY = -Math.cos(rad);
+        const dirX = TrigLUT.sin(state.currentAngle);
+        const dirY = -TrigLUT.cos(state.currentAngle);
 
         const nextX = state.x + dirX * speedValue;
         const nextY = state.y + dirY * speedValue;
@@ -599,8 +599,8 @@ export default function PlayArea({ onBack, selectedBeagle, selectedRider, settin
       }
 
       if (state.isMovingBackward) {
-        const dirX = Math.sin(rad);
-        const dirY = -Math.cos(rad);
+        const dirX = TrigLUT.sin(state.currentAngle);
+        const dirY = -TrigLUT.cos(state.currentAngle);
 
         const nextX = state.x - dirX * speedValue;
         const nextY = state.y - dirY * speedValue;
@@ -716,10 +716,9 @@ export default function PlayArea({ onBack, selectedBeagle, selectedRider, settin
 
       // --- 4. High-Fidelity 2.5D Perspective Scanning Floor and Ceiling Renderer ---
       // Utilizing mathematical virtualization and pre-allocated zero-GC buffer
-      const lookRad = (state.currentAngle * Math.PI) / 180;
       const fov_scale = 130; // High-precision focal scale
-      const cosLook = Math.cos(lookRad);
-      const sinLook = Math.sin(lookRad);
+      const cosLook = TrigLUT.cos(state.currentAngle);
+      const sinLook = TrigLUT.sin(state.currentAngle);
       
       const horizon_offset = -walkBob + (state.jumpZ * 1.5); // Dynamic camera bounce tool
       const horizon = Math.floor(renderHeight / 2) + Math.floor(horizon_offset);
@@ -1140,12 +1139,12 @@ export default function PlayArea({ onBack, selectedBeagle, selectedRider, settin
 
       // D. Ears
       ctx.fillStyle = earColor;
-      const leftEarBob = Math.sin(state.bobFrame * 1.5) * 2;
+      const leftEarBob = TrigLUT.sin(state.bobFrame * 85.94) * 2;
       ctx.beginPath();
       ctx.ellipse(centerX - 22, baseHeadY - 2 + leftEarBob, 11, 20, Math.PI / 10, 0, Math.PI * 2);
       ctx.fill();
 
-      const rightEarBob = -Math.sin(state.bobFrame * 1.5) * 2;
+      const rightEarBob = -TrigLUT.sin(state.bobFrame * 85.94) * 2;
       ctx.beginPath();
       ctx.ellipse(centerX + 22, baseHeadY - 2 + rightEarBob, 11, 20, -Math.PI / 10, 0, Math.PI * 2);
       ctx.fill();
@@ -1179,8 +1178,8 @@ export default function PlayArea({ onBack, selectedBeagle, selectedRider, settin
       // Tina wags her tail with delight when petted
       const isTinaPetting = state.selectedBeagle === 'TINA' && state.petTimer > 0;
       const tailBob = isTinaPetting 
-        ? Math.sin(state.bobFrame * 8) * 15 // Intense wag
-        : Math.sin(state.bobFrame * 2) * 3;
+        ? TrigLUT.sin(state.bobFrame * 458.37) * 15 // Intense wag
+        : TrigLUT.sin(state.bobFrame * 114.59) * 3;
       ctx.moveTo(centerX, renderHeight + 10);
       ctx.quadraticCurveTo(centerX + 15 + tailBob, renderHeight - 15, centerX + 20 + tailBob, renderHeight - 45);
       ctx.stroke();
@@ -1256,7 +1255,7 @@ export default function PlayArea({ onBack, selectedBeagle, selectedRider, settin
       }
 
       // G. Player's hands and Rider Visuals
-      const handBobY = Math.sin(state.bobFrame * 2) * 1.2;
+      const handBobY = TrigLUT.sin(state.bobFrame * 114.59) * 1.2;
       
       // Dynamic Rider properties
       const riderSkinColor = currentRiderSpecs.skinColor;

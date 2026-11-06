@@ -5,6 +5,7 @@
 
 import { WorldRegistry } from '../../Registry/Building_Blocks/World/index';
 import { TempleMazeData, isTempleWallAt } from '../../UI/Play_Area/templeMaze';
+import { TrigLUT } from '../Mathematics/LUT/Trig';
 
 export * from './General/index';
 export * from './Collision/index';
@@ -35,10 +36,10 @@ export interface MovementAttemptResult {
  * - Temple: 2000 x 2000
  */
 export const MovementEngine = {
-  calculateForward: (x: number, y: number, angleRad: number, distance: number) => {
+  calculateForward: (x: number, y: number, angleDeg: number, distance: number) => {
     return {
-      x: x + Math.cos(angleRad) * distance,
-      y: y + Math.sin(angleRad) * distance
+      x: x + TrigLUT.cos(angleDeg) * distance,
+      y: y + TrigLUT.sin(angleDeg) * distance
     };
   },
 
