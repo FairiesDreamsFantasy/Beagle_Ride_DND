@@ -7,14 +7,31 @@ export * from "./General/index";
 import { NumPyConfig, DEFAULT_NUMPY_CONFIG } from "./General/index";
 
 /**
- * NumPy Vectorized Audio Mathematical Controller.
- * Implements vectorized array generators, trigonometric waves, and spectral analysis for procedural audio.
+ * NumPy Audio Mathematical Engine.
+ * Implements vectorized array generators and Fourier harmonic composition.
  */
 export class SoundNumPyController {
   private config: NumPyConfig = { ...DEFAULT_NUMPY_CONFIG };
 
   public getStatus() {
     return { module: "SoundNumPy", active: true, config: this.config, vectorEngine: "NUMPY_ARRAY_MATH" };
+  }
+
+  /**
+   * Generates a complex harmonic wave via Fourier summation (np-style vectorized).
+   */
+  public generateFourierSquare(frequency: number, numSamples: number, sampleRate: number, harmonics: number = 8): Float32Array {
+    const t = this.linspace(0, numSamples / sampleRate, numSamples);
+    const result = new Float32Array(numSamples);
+    for (let k = 1; k <= harmonics; k += 2) {
+      const freqK = frequency * k;
+      for (let i = 0; i < numSamples; i++) {
+        result[i] += Math.sin(2 * Math.PI * freqK * t[i]) / k;
+      }
+    }
+    const factor = 4 / Math.PI;
+    for (let i = 0; i < numSamples; i++) result[i] *= factor;
+    return result;
   }
 
   /**

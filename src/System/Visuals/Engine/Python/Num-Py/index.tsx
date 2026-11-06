@@ -8,13 +8,32 @@ import { NumPyConfig, DEFAULT_NUMPY_CONFIG } from "./General/index";
 
 /**
  * NumPy Visual Matrix & Linear Algebra Engine.
- * Implements 4x4 homogeneous matrix multiplication, vector dot products, and normal transformations.
+ * Implements 4x4 matrix multiplication and dither matrix generation.
  */
 export class VisualsNumPyController {
   private config: NumPyConfig = { ...DEFAULT_NUMPY_CONFIG };
 
   public getStatus() {
     return { module: "VisualsNumPy", active: true, config: this.config, algebraMode: "MATRIX_4X4" };
+  }
+
+  /**
+   * Generates an 8x8 Bayer dithering matrix (np-style).
+   */
+  public generateBayer8x8(): Float32Array {
+    const b = new Float32Array(64);
+    const m4 = [
+      0, 32,  8, 40,  2, 34, 10, 42,
+      48, 16, 56, 24, 50, 18, 58, 26,
+      12, 44,  4, 36, 14, 46,  6, 38,
+      60, 28, 52, 20, 62, 30, 54, 22,
+      3, 35, 11, 43,  1, 33,  9, 41,
+      51, 19, 59, 27, 49, 17, 57, 25,
+      15, 47,  7, 39, 13, 45,  5, 37,
+      63, 31, 55, 23, 61, 29, 53, 21
+    ];
+    for (let i = 0; i < 64; i++) b[i] = m4[i] / 64.0;
+    return b;
   }
 
   /**

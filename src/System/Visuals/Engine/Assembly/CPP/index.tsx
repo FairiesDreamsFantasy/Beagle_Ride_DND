@@ -7,14 +7,47 @@ export * from "./General/index";
 import { CPPConfig, DEFAULT_CPP_CONFIG } from "./General/index";
 
 /**
- * C++ High-Speed Rasterizer (Bresenham & Scanline Pipeline).
- * Performs pure integer coordinate rasterization directly into pre-allocated Uint32 framebuffer arrays.
+ * C++ High-Speed Rasterizer & RAII Resource Manager.
+ * Implements deterministic buffer pooling and pure integer rasterization.
  */
 export class VisualsAssemblyCPPController {
   private config: CPPConfig = { ...DEFAULT_CPP_CONFIG };
+  private bufferPool: Map<string, ArrayBuffer[]> = new Map();
 
   public getStatus() {
-    return { module: "VisualsAssemblyCPP", active: true, config: this.config, pipeline: "BRESENHAM_RASTER" };
+    return { 
+      module: "VisualsAssemblyCPP", 
+      active: true, 
+      config: this.config, 
+      pipeline: "BRESENHAM_RASTER",
+      poolCount: this.bufferPool.size
+    };
+  }
+
+  /**
+   * RAII-style buffer acquisition. Prevents GC spikes by reusing typed arrays.
+   */
+  public acquireBuffer(key: string, size: number): Uint32Array {
+    let pool = this.bufferPool.get(key);
+    if (!pool) {
+      pool = [];
+      this.bufferPool.set(key, pool);
+    }
+    const buf = pool.pop();
+    if (buf && buf.byteLength >= size * 4) {
+      return new Uint32Array(buf, 0, size);
+    }
+    return new Uint32Array(size);
+  }
+
+  /**
+   * RAII-style buffer release for deterministic reuse.
+   */
+  public releaseBuffer(key: string, arr: Uint32Array): void {
+    const pool = this.bufferPool.get(key);
+    if (pool && pool.length < 16) {
+      pool.push(arr.buffer);
+    }
   }
 
   /**

@@ -7,8 +7,8 @@ export * from "./General/index";
 import { WebAssemblyConfig, DEFAULT_WEBASSEMBLY_CONFIG } from "./General/index";
 
 /**
- * WebAssembly Linear Memory Audio DSP Simulator.
- * Emulates WASM 64KB page linear memory for high-speed deterministic float audio processing.
+ * WebAssembly Audio Engine.
+ * Emulates high-speed WASM linear memory processing and frequency-domain scaling.
  */
 export class SoundAssemblyWebAssemblyController {
   private config: WebAssemblyConfig = { ...DEFAULT_WEBASSEMBLY_CONFIG };
@@ -22,6 +22,19 @@ export class SoundAssemblyWebAssemblyController {
       linearMemoryBytes: this.memoryPage.byteLength,
       pageCount: 1
     };
+  }
+
+  /**
+   * Simple frequency-domain multiplier simulation (pseudo-EQ).
+   * Scales samples by index-based weights to simulate spectral filtering.
+   */
+  public spectralScale(offset: number, length: number, lowGain: number, highGain: number): void {
+    const end = Math.min(this.memoryPage.length, offset + length);
+    for (let i = offset; i < end; i++) {
+      const progress = (i - offset) / (length || 1);
+      const weight = lowGain + (highGain - lowGain) * progress;
+      this.memoryPage[i] *= weight;
+    }
   }
 
   /**

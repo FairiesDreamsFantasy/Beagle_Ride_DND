@@ -15,8 +15,8 @@ export interface AudioVoiceChannel {
 }
 
 /**
- * C# Audio Channel Bus & Polyphonic Mixer.
- * Implements strongly-typed voice slot allocation and master mix summation.
+ * C# Audio Mixing Engine.
+ * Implements polyphonic voice allocation and distance-based decibel attenuation.
  */
 export class SoundAssemblyCSharpController {
   private config: CSharpConfig = { ...DEFAULT_CSHARP_CONFIG };
@@ -43,6 +43,14 @@ export class SoundAssemblyCSharpController {
       activeVoiceCount: this.voiceSlots.filter(v => v.isActive).length,
       maxVoices: this.MAX_VOICES
     };
+  }
+
+  /**
+   * Calculates gain based on inverse-square distance (1/d^2).
+   */
+  public calculateDistanceAttenuation(distance: number, refDistance: number = 10): number {
+    if (distance <= refDistance) return 1.0;
+    return (refDistance * refDistance) / (distance * distance);
   }
 
   public allocateVoice(freq: number, gain: number, pan: number = 0): number {

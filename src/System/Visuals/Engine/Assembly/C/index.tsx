@@ -6,16 +6,42 @@
 export * from "./General/index";
 import { CConfig, DEFAULT_C_CONFIG } from "./General/index";
 
-
 /**
- * Mathematical Rasterization & Matrix Pipeline (Visuals C-Virtualization Engine).
- * Performs pure fixed-point 3D affine transformations and perspective projection without VRAM overhead.
+ * High-Performance Visuals C-Engine.
+ * Implements bitwise pixel packing, raw memory arenas, and fast coordinate transforms.
  */
 export class VisualsAssemblyCController {
   private config: CConfig = { ...DEFAULT_C_CONFIG };
+  private arena: Uint8Array = new Uint8Array(1024 * 64); // 64KB static arena
+  private arenaOffset: number = 0;
 
   public getStatus() {
-    return { module: "VisualsAssemblyC", active: true, config: this.config, mathPipeline: "FIXED_POINT_PROJECTION" };
+    return { 
+      module: "VisualsAssemblyC", 
+      active: true, 
+      config: this.config, 
+      arenaSize: this.arena.length,
+      arenaUsed: this.arenaOffset
+    };
+  }
+
+  /**
+   * Packs RGBA components into a 32-bit integer for buffer blitting.
+   */
+  public packPixel(r: number, g: number, b: number, a: number = 255): number {
+    return ((a & 0xFF) << 24) | ((b & 0xFF) << 16) | ((g & 0xFF) << 8) | (r & 0xFF);
+  }
+
+  /**
+   * Linear arena allocation for transient vertex arrays (O(1)).
+   */
+  public malloc(bytes: number): Uint8Array {
+    if (this.arenaOffset + bytes > this.arena.length) {
+      this.arenaOffset = 0; // Cyclic reset for transient data
+    }
+    const view = this.arena.subarray(this.arenaOffset, this.arenaOffset + bytes);
+    this.arenaOffset += bytes;
+    return view;
   }
 
   /**

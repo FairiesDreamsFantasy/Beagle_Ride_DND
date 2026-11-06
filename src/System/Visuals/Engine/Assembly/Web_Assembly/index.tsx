@@ -7,8 +7,8 @@ export * from "./General/index";
 import { WebAssemblyConfig, DEFAULT_WEBASSEMBLY_CONFIG } from "./General/index";
 
 /**
- * WebAssembly Visual Framebuffer & Blitter Simulator.
- * Emulates high-speed WASM linear memory blitting directly into 32-bit pixel buffers without canvas overhead.
+ * WebAssembly Visual Engine.
+ * Emulates high-speed WASM linear memory blitting and pixel-level buffer scaling.
  */
 export class VisualsAssemblyWebAssemblyController {
   private config: WebAssemblyConfig = { ...DEFAULT_WEBASSEMBLY_CONFIG };
@@ -22,6 +22,20 @@ export class VisualsAssemblyWebAssemblyController {
       resolution: { width: 320, height: 180 },
       frameBufferBytes: this.frameBuffer.byteLength
     };
+  }
+
+  /**
+   * Fast WASM-style SIMD batch brightness scaling directly in linear memory.
+   */
+  public scaleBrightness(factor: number): void {
+    const buf = this.frameBuffer;
+    for (let i = 0; i < buf.length; i++) {
+      const p = buf[i];
+      const r = Math.min(255, ((p & 0xFF) * factor) | 0);
+      const g = Math.min(255, (((p >> 8) & 0xFF) * factor) | 0);
+      const b = Math.min(255, (((p >> 16) & 0xFF) * factor) | 0);
+      buf[i] = (p & 0xFF000000) | (b << 16) | (g << 8) | r;
+    }
   }
 
   /**

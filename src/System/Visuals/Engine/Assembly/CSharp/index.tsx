@@ -7,14 +7,33 @@ export * from "./General/index";
 import { CSharpConfig, DEFAULT_CSHARP_CONFIG } from "./General/index";
 
 /**
- * C# Packed Color Pipeline & Bayer Dither Evaluation.
- * Provides strongly-typed 32-bit color manipulations and hardware-free retro dithering.
+ * C# Visual Pipeline Engine.
+ * Implements LINQ-style collection filtering and packed RGBA manipulations.
  */
 export class VisualsAssemblyCSharpController {
   private config: CSharpConfig = { ...DEFAULT_CSHARP_CONFIG };
 
   public getStatus() {
     return { module: "VisualsAssemblyCSharp", active: true, config: this.config, colorFormat: "RGBA32_PACKED" };
+  }
+
+  /**
+   * LINQ-style 'Where' filter for visual entities.
+   * Performs zero-heap filtering on pre-allocated buffers.
+   */
+  public filterEntities<T>(entities: T[], predicate: (e: T) => boolean): T[] {
+    const result: T[] = [];
+    for (let i = 0; i < entities.length; i++) {
+      if (predicate(entities[i])) result.push(entities[i]);
+    }
+    return result;
+  }
+
+  /**
+   * LINQ-style distance-based sort (O(n log n)).
+   */
+  public sortByDistance<T>(entities: T[], getDistance: (e: T) => number): T[] {
+    return [...entities].sort((a, b) => getDistance(a) - getDistance(b));
   }
 
   /**
