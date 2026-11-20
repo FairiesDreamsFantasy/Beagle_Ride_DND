@@ -1,0 +1,57 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * System/Building_Blocks/Animations/Color_Palette/Texture_Palette/index.tsx
+ * Packed 32-bit ABGR Material Swatches for Architectural Building Blocks.
+ * Eliminates ad-hoc hex literals across room renderers with verified packed integers.
+ */
+
+export const BlockTexturePalette = {
+  // General structural void / trim
+  VOID_BLACK: 0xFF0B0B0B,
+  WALL_BASE_DARK: 0xFF0D0D0D,
+  WALL_GROUT_DARK: 0xFF242424,
+
+  // Foyer Ceramic Royal Tiles & Ceilings
+  FOYER_TILE_BLUE: 0xFFCE8836,
+  FOYER_TILE_BLUE_BEVEL: 0xFF9E5C1E,
+  FOYER_TILE_GREEN: 0xFF0BB174,
+  FOYER_TILE_GREEN_BEVEL: 0xFF045F3C,
+  FOYER_CEILING_LIGHT: 0xFFE0EAEF,
+  FOYER_CEILING_ALT: 0xFFCCE0EC,
+  FOYER_NORTH_LINTEL: 0xFFF2C299,
+
+  // Garden Meadow Turf, Flowers, Hedges & Horizon
+  GARDEN_GRASS_PRIMARY: 0xFF2D8A4E,
+  GARDEN_GRASS_ALT: 0xFF3CB063,
+  GARDEN_FLOWER_MAGENTA: 0xFFC286FF,
+  GARDEN_FLOWER_GOLD: 0xFF8AE3FF,
+  GARDEN_HEDGE_DARK: 0xFF143B20,
+  GARDEN_HEDGE_LIGHT: 0xFF1B4E2B,
+
+  // Front Porch Planks, Railings, Pillars & Lanterns
+  PORCH_PLANK_LIGHT: 0xFF1A222D,
+  PORCH_PLANK_DARK: 0xFF0F141C,
+  PORCH_CEILING_LIGHT: 0xFF141C25,
+  PORCH_CEILING_DARK: 0xFF0A0F15,
+  PORCH_LANTERN_GLOW: 0xFF7FEFFF,
+  PORCH_COLUMN_WHITE: 0xFFDFEFFF,
+  PORCH_RAILING_DARK: 0xFF121212,
+  PORCH_LAWN_SURROUND: 0xFF1E3A24,
+  TEMPLE_GATE_LINTEL: 0xFFFFC04D,
+
+  // Temple Masonry & Floor Tiles
+  TEMPLE_WALL_MORTAR: 0xFF14171D,
+  TEMPLE_WALL_MOSS: 0xFF2D3C34,
+  TEMPLE_WALL_SLATE: 0xFF3D4756,
+  TEMPLE_WALL_GRANITE: 0xFF4A5567,
+  TEMPLE_FLOOR_GROUT: 0xFF14171B,
+  TEMPLE_FLOOR_LIGHT: 0xFF2D333C,
+  TEMPLE_FLOOR_DARK: 0xFF21252B,
+  TEMPLE_CEILING_GROUT: 0xFF101317,
+  TEMPLE_CEILING_LIGHT: 0xFF1F252C,
+  TEMPLE_CEILING_DARK: 0xFF171B20
+} as const;
+
+export default BlockTexturePalette;

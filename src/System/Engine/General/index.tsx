@@ -14,9 +14,9 @@ export const EngineGeneralConfig = {
 };
 
 /**
- * Ultra-Scientific Performance and Jitter Stabilization Engine.
- * Formulated with double-precision floating-point arithmetic to eliminate CPU/GPU rendering overhead
- * and prevent memory allocation spikes (reducing Garbage Collection spikes by 40,000,000%).
+ * Performance and Jitter Stabilization Engine.
+ * Formulated with double-precision floating-point arithmetic and pre-allocated ring buffers
+ * to track frame deltas without heap allocation churn.
  */
 export class HighPrecisionFrameStabilizer {
   private lastFrameTime: number = 0;

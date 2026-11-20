@@ -20,6 +20,18 @@ export class HardwareAudioThrottler {
   public releaseVoice(): void {
     this.activeVoices = Math.max(0, this.activeVoices - 1);
   }
+
+  public getActiveVoices(): number {
+    return this.activeVoices;
+  }
+
+  public getMaxVoices(): number {
+    return this.MAX_VOICES;
+  }
+
+  public reset(): void {
+    this.activeVoices = 0;
+  }
 }
 
 export const soundCardUnit = new HardwareAudioThrottler();

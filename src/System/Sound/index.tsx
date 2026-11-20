@@ -25,6 +25,8 @@ import { SFX_VOICE_NAMES, BGM_VOICE_NAMES } from './Registry';
 import { Foyer } from '../../House/Foyer/index';
 import { FrontPorch } from '../../House/Front_Porch/index';
 import { Garden } from '../../House/Garden/index';
+import { soundCardUnit } from '../Hardware_Virtualization/Sound_Card/index';
+import { AcousticsEngine } from '../Engine/Science/Acoustics/index';
 
 export const SFX_VOICES: SoundVoice[] = Array.from({ length: 32 }, (_, i) => {
   return {
@@ -50,63 +52,82 @@ class SynthesizerEngine {
   private notchFilter: BiquadFilterNode | null = null;
   private dcBlocker: BiquadFilterNode | null = null;
   private limiter: DynamicsCompressorNode | null = null;
-  private bgmIntervalId: any = null;
+  private hallwayReverbBus: GainNode | null = null;
+  private hallwayDelay: DelayNode | null = null;
+  private hallwayFeedback: GainNode | null = null;
+  private hallwayWetFilter: BiquadFilterNode | null = null;
+  private templeReverbBus: GainNode | null = null;
+  private templeDelay: DelayNode | null = null;
+  private templeFeedback: GainNode | null = null;
+  private templeWetFilter: BiquadFilterNode | null = null;
+  private bgmFilter: BiquadFilterNode | null = null;
+  private whiteNoiseBuffer: AudioBuffer | null = null;
+  private bgmIntervalId: ReturnType<typeof setInterval> | null = null;
+  private nextBgmNoteTime = 0;
   private currentStep = 0;
   private rawVolume = 0.25;
   private isMutedValue = false;
   private activeBgmId = 0;
-  private currentPlayingType: 'sfx' | 'bgm' | 'ambience' = 'sfx';
-
-  // Continuous background mains hum oscillators
-  private mainsHumOsc: OscillatorNode | null = null;
-  private mainsHumGain: GainNode | null = null;
   private currentRoom: 'FOYER' | 'GARDEN' | 'PORCH' | 'TEMPLE' = 'FOYER';
 
-  // High-performance static white noise buffer (pre-allocated once for zero-GC bark resonance)
-  private sharedWhiteNoiseBuffer: AudioBuffer | null = null;
-  private activeSfxCount: number = 0;
-  private readonly maxConcurrentSfx: number = 12; // Clamps voice polyphony to prevent audio driver spikes
-
-  // 64-bit double-precision upsampling with TPDF dither for realistic frequency reproduction without quantization noise
+  // JS numbers are IEEE-754 float64; Web Audio AudioParam quantizes to float32 natively, so return frequency directly
   public upsample64Bit(frequency: number): number {
-    return applyTPDFDither(frequency, 64);
+    return frequency;
   }
 
-  // Volume balance: Normalized decibel-to-linear gain conversion
-  public get volume(): number {
+  // Channel-safe volume scaling without mutable shared channel state races
+  public getChannelVolume(channel: 'sfx' | 'bgm' | 'ambience'): number {
     const masterGain = MasterVolumeControl.gain;
-    
-    // Standard reference: -6dB for BGM, 0dB for Ambience, +3dB for SFX
-    const dbOffset = this.currentPlayingType === 'bgm' ? -6 : (this.currentPlayingType === 'ambience' ? 0 : 3);
-    const linearGain = Math.pow(10, dbOffset / 20);
-
-    return Number((this.rawVolume * linearGain * masterGain).toFixed(15));
+    if (channel === 'bgm') {
+      return Number((this.rawVolume * 0.945 * masterGain).toFixed(15));
+    } else if (channel === 'ambience') {
+      return Number((this.rawVolume * 1.134 * masterGain).toFixed(15));
+    } else {
+      return Number((this.rawVolume * 1.863 * masterGain).toFixed(15));
+    }
   }
 
-  // Lazily initialize AudioContext and Master Bus on first user interaction
+  public get volume(): number {
+    return this.getChannelVolume('sfx');
+  }
+
+  // Shared 1.0s cached white-noise AudioBuffer reused across all noise-based SFX with zero per-step allocation
+  private getWhiteNoiseBuffer(ctx: AudioContext): AudioBuffer {
+    if (!this.whiteNoiseBuffer || this.whiteNoiseBuffer.sampleRate !== ctx.sampleRate) {
+      const length = Math.max(1, Math.floor(ctx.sampleRate * 1.0));
+      const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < length; i++) {
+        data[i] = Math.random() * 2 - 1;
+      }
+      this.whiteNoiseBuffer = buffer;
+    }
+    return this.whiteNoiseBuffer;
+  }
+
+  // Lazily initialize AudioContext, Master DSP Bus, and shared Reverb Send Buses on first interaction
   private getContext(): AudioContext {
     if (!this.ctx) {
-      // Set high-fidelity options if supported to reduce performance overhead and spikes by 4000%
-      this.ctx = new (window.AudioContext || (window as any).webkitAudioContext)({
+      this.ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)({
         latencyHint: 'interactive'
       });
 
       const ctx = this.ctx;
       const now = ctx.currentTime;
 
-      // 1. DC Blocker (High-Pass at 20Hz) to prevent signal bias
+      // 1. DC Blocker (High-Pass at 20Hz) to prevent DC offset
       this.dcBlocker = ctx.createBiquadFilter();
       this.dcBlocker.type = 'highpass';
       this.dcBlocker.frequency.setValueAtTime(20, now);
       this.dcBlocker.Q.setValueAtTime(0.707, now);
 
-      // 2. Resonant Notch Filter at 60Hz to eliminate mains hum interference
+      // 2. Resonant Notch Filter at 60Hz for indoor acoustics
       this.notchFilter = ctx.createBiquadFilter();
       this.notchFilter.type = 'notch';
       this.notchFilter.frequency.setValueAtTime(60, now);
       this.notchFilter.Q.setValueAtTime(10.0, now);
 
-      // 3. Soft-Knee Limiter for mathematical stability and normalization
+      // 3. Soft-Knee Limiter for signal normalization
       this.limiter = ctx.createDynamicsCompressor();
       this.limiter.threshold.setValueAtTime(-0.5, now);
       this.limiter.knee.setValueAtTime(12, now);
@@ -114,7 +135,7 @@ class SynthesizerEngine {
       this.limiter.attack.setValueAtTime(0.003, now);
       this.limiter.release.setValueAtTime(0.1, now);
 
-      // 4. Master Gain Stage (Decreased by 10% to prevent loudness spikes)
+      // 4. Master Gain Stage
       this.masterBus = ctx.createGain();
       this.masterBus.gain.setValueAtTime(0.9, now);
 
@@ -124,39 +145,53 @@ class SynthesizerEngine {
       this.limiter.connect(this.masterBus);
       this.masterBus.connect(ctx.destination);
 
-      // 5. Continuous Pure Mains Hum Generator (Fades in if indoors, starts silent if outdoors)
-      try {
-        this.mainsHumOsc = ctx.createOscillator();
-        this.mainsHumOsc.type = 'sine';
-        this.mainsHumOsc.frequency.setValueAtTime(60.0, now);
+      // 5. Shared Reusable Hallway Reverb Send Bus calibrated via AcousticsEngine
+      const foyerAcoustics = AcousticsEngine.getRoomProfile('FOYER');
+      this.hallwayReverbBus = ctx.createGain();
+      this.hallwayReverbBus.gain.setValueAtTime(foyerAcoustics.wetSendGain, now);
+      this.hallwayDelay = ctx.createDelay(1.0);
+      this.hallwayDelay.delayTime.setValueAtTime(foyerAcoustics.earlyReflectionDelaySec, now);
+      this.hallwayWetFilter = ctx.createBiquadFilter();
+      this.hallwayWetFilter.type = 'lowpass';
+      this.hallwayWetFilter.frequency.setValueAtTime(foyerAcoustics.wetDampingCutoffHz, now);
+      this.hallwayFeedback = ctx.createGain();
+      this.hallwayFeedback.gain.setValueAtTime(foyerAcoustics.feedbackGain, now);
+      this.hallwayReverbBus.connect(this.hallwayDelay);
+      this.hallwayDelay.connect(this.hallwayWetFilter);
+      this.hallwayWetFilter.connect(this.hallwayFeedback);
+      this.hallwayFeedback.connect(this.hallwayDelay);
+      this.hallwayFeedback.connect(this.dcBlocker);
 
-        this.mainsHumGain = ctx.createGain();
-        const isIndoor = (this.currentRoom === 'FOYER' || this.currentRoom === 'TEMPLE');
-        const isRoomIndoor = isIndoor || (Foyer.room === 'FOYER' && this.currentRoom === 'FOYER');
-        const initialGain = (isRoomIndoor && !this.isMutedValue) ? 0.004 * this.rawVolume : 0.0;
-        this.mainsHumGain.gain.setValueAtTime(initialGain, now);
+      // 6. Shared Reusable Temple Reverb Send Bus calibrated via AcousticsEngine
+      const templeAcoustics = AcousticsEngine.getRoomProfile('TEMPLE');
+      this.templeReverbBus = ctx.createGain();
+      this.templeReverbBus.gain.setValueAtTime(templeAcoustics.wetSendGain, now);
+      this.templeDelay = ctx.createDelay(1.0);
+      this.templeDelay.delayTime.setValueAtTime(templeAcoustics.earlyReflectionDelaySec, now);
+      this.templeWetFilter = ctx.createBiquadFilter();
+      this.templeWetFilter.type = 'lowpass';
+      this.templeWetFilter.frequency.setValueAtTime(templeAcoustics.wetDampingCutoffHz, now);
+      this.templeFeedback = ctx.createGain();
+      this.templeFeedback.gain.setValueAtTime(templeAcoustics.feedbackGain, now);
+      this.templeReverbBus.connect(this.templeDelay);
+      this.templeDelay.connect(this.templeWetFilter);
+      this.templeWetFilter.connect(this.templeFeedback);
+      this.templeFeedback.connect(this.templeDelay);
+      this.templeFeedback.connect(this.dcBlocker);
 
-        this.mainsHumOsc.connect(this.mainsHumGain);
-        this.mainsHumGain.connect(this.masterBus);
-        this.mainsHumOsc.start(now);
-      } catch (err) {
-        console.warn('Failed to start continuous mains hum oscillator:', err);
-      }
+      // 7. Shared Reusable BGM Lowpass Filter (eliminates 4 BiquadFilterNode allocations per BGM tick)
+      this.bgmFilter = ctx.createBiquadFilter();
+      this.bgmFilter.type = 'lowpass';
+      this.bgmFilter.frequency.setValueAtTime(1200, now);
+      this.bgmFilter.connect(this.dcBlocker);
 
-      // 6. Pre-allocate static 1.0-second white noise buffer (0 GC allocations per bark)
-      try {
-        const bufferSize = Math.floor(ctx.sampleRate * 1.0);
-        this.sharedWhiteNoiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-        const channelData = this.sharedWhiteNoiseBuffer.getChannelData(0);
-        for (let i = 0; i < bufferSize; i++) {
-          channelData[i] = Math.random() * 2 - 1;
-        }
-      } catch (err) {
-        console.warn('Failed to pre-allocate white noise buffer:', err);
-      }
+      // Pre-populate cached white noise buffer once and apply current room acoustics
+      this.getWhiteNoiseBuffer(ctx);
+      soundCardUnit.reset();
+      this.updateRoomAcoustics(this.currentRoom);
     }
     if (this.ctx.state === 'suspended') {
-      this.ctx.resume();
+      this.ctx.resume().catch(() => {});
     }
     return this.ctx;
   }
@@ -170,159 +205,158 @@ class SynthesizerEngine {
     try {
       const ctx = this.getContext();
       if (ctx.state === 'suspended') {
-        ctx.resume().catch(() => {});
+        ctx.resume();
       }
     } catch (e) {
       console.warn('Could not resume Web Audio context:', e);
     }
   }
 
-  private updateMainsHumVolume(): void {
-    if (!this.ctx || !this.mainsHumGain) return;
-    const now = this.ctx.currentTime;
-
-    const isIndoor = (this.currentRoom === 'FOYER' || this.currentRoom === 'TEMPLE');
-    const isOutdoor = (this.currentRoom === 'GARDEN' || Garden.zone === 'OUTDOOR') || (this.currentRoom === 'PORCH' || FrontPorch.zone === 'OUTDOOR');
-    const isRoomIndoor = isIndoor && !isOutdoor;
-
-    // Mathematically cancel all pending parameters to avoid queue overlaps and AudioParam lockups
-    this.mainsHumGain.gain.cancelScheduledValues(now);
-
-    if (isRoomIndoor && !this.isMutedValue) {
-      const targetGain = 0.004 * this.rawVolume;
-      // Exponential convergence over 150ms for elegant, hum-free natural indoor acoustic transition
-      this.mainsHumGain.gain.setTargetAtTime(targetGain, now, 0.15);
-    } else {
-      // Instantly apply absolute ground state silence when outdoors or muted to prevent leakage
-      this.mainsHumGain.gain.setValueAtTime(0.0, now);
-    }
-  }
-
   public updateRoomAcoustics(room: 'FOYER' | 'GARDEN' | 'PORCH' | 'TEMPLE'): void {
     this.currentRoom = room;
-    if (!this.ctx || !this.dcBlocker || !this.notchFilter || !this.limiter || !this.mainsHumGain) return;
+    if (!this.ctx || !this.dcBlocker || !this.notchFilter || !this.limiter) return;
 
-    const isIndoor = (room === 'FOYER' || room === 'TEMPLE');
-    const isOutdoor = (room === 'GARDEN' || Garden.zone === 'OUTDOOR') || (room === 'PORCH' || FrontPorch.zone === 'OUTDOOR');
-    const isRoomIndoor = isIndoor && !isOutdoor;
+    const now = this.ctx.currentTime;
+    const acousticProfile = AcousticsEngine.getRoomProfile(room);
+    const isIndoor = (room === Foyer.room && Foyer.zone === 'INDOOR') || room === 'TEMPLE';
+    const isOutdoor = (room === 'GARDEN' && Garden.zone === 'OUTDOOR') || (room === 'PORCH' && FrontPorch.zone === 'OUTDOOR');
+    const isRoomIndoor = isIndoor && !isOutdoor && acousticProfile.isIndoor;
+
+    // Smoothly tune shared reusable reverb buses from Eyring RT60 / ISO 9613-1 geometry
+    if (this.hallwayReverbBus && this.hallwayDelay && this.hallwayFeedback && this.hallwayWetFilter) {
+      if (room !== 'TEMPLE') {
+        this.hallwayReverbBus.gain.setTargetAtTime(acousticProfile.wetSendGain, now, 0.025);
+        this.hallwayDelay.delayTime.setTargetAtTime(acousticProfile.earlyReflectionDelaySec, now, 0.025);
+        this.hallwayFeedback.gain.setTargetAtTime(acousticProfile.feedbackGain, now, 0.025);
+        this.hallwayWetFilter.frequency.setTargetAtTime(acousticProfile.wetDampingCutoffHz, now, 0.025);
+      }
+    }
+    if (this.templeReverbBus && this.templeDelay && this.templeFeedback && this.templeWetFilter && room === 'TEMPLE') {
+      this.templeReverbBus.gain.setTargetAtTime(acousticProfile.wetSendGain, now, 0.025);
+      this.templeDelay.delayTime.setTargetAtTime(acousticProfile.earlyReflectionDelaySec, now, 0.025);
+      this.templeFeedback.gain.setTargetAtTime(acousticProfile.feedbackGain, now, 0.025);
+      this.templeWetFilter.frequency.setTargetAtTime(acousticProfile.wetDampingCutoffHz, now, 0.025);
+    }
 
     // Disconnect routing to cleanly rebuild the master DSP signal chain
     this.dcBlocker.disconnect();
     this.notchFilter.disconnect();
 
     if (isRoomIndoor) {
-      // Indoor: Route through 60Hz resonant notch filter to protect audio
       this.dcBlocker.connect(this.notchFilter);
       this.notchFilter.connect(this.limiter);
     } else {
-      // Outdoor: Completely bypass the notch filter
       this.dcBlocker.connect(this.limiter);
     }
-
-    this.updateMainsHumVolume();
   }
 
   public setVolume(vol: number) {
     this.rawVolume = Math.max(0, Math.min(1, vol));
-    this.updateMainsHumVolume();
   }
 
   public setMute(mute: boolean) {
     this.isMutedValue = mute;
     if (mute) {
       this.stopBGM();
-    } else {
+    } else if (this.currentRoom === 'GARDEN') {
       this.startBGM(this.activeBgmId);
     }
-    this.updateMainsHumVolume();
   }
 
   public isMuted(): boolean {
     return this.isMutedValue;
   }
 
-  // Play a specific SFX voice using Web Audio synthesis
-  // Note: This engine utilizes fully independent, non-blocking Web Audio node architectures,
-  // providing robust polyphonic support so that multiple overlapping sound events (e.g. concurrent
-  // barks, footsteps, collisions, and sparkles) layer harmoniously without interruption.
-  public playSfx(id: number, reverb: 'TEMPLE' | 'HALLWAY' | 'NONE' | boolean = false, room: 'FOYER' | 'GARDEN' | 'PORCH' | 'TEMPLE' = 'FOYER', pitchModifier: number = 1.0) {
+  // Play a specific SFX voice using Web Audio synthesis with shared reverb buses,
+  // cached white-noise buffers, voice throttling, and sample-accurate offsetSec scheduling.
+  public playSfx(
+    id: number,
+    reverb: 'TEMPLE' | 'HALLWAY' | 'NONE' | boolean = false,
+    room: 'FOYER' | 'GARDEN' | 'PORCH' | 'TEMPLE' = 'FOYER',
+    pitchModifier: number = 1.0,
+    offsetSec: number = 0
+  ) {
     if (this.isMutedValue) return;
-    if (this.activeSfxCount >= this.maxConcurrentSfx) return; // Strict polyphony clamp eliminates thread starvation spikes
-    this.currentPlayingType = 'sfx';
+    const isCritical = id === 0 || id === 3 || id === 4 || id === 9 || id === 12 || id === 14;
+    const voiceAcquired = soundCardUnit.requestVoice();
+    if (!voiceAcquired && !isCritical) {
+      return;
+    }
+
+    const sfxVol = this.getChannelVolume('sfx');
+    let released = false;
+    let sfxBus: GainNode | null = null;
+    const releaseVoiceOnce = () => {
+      if (!released) {
+        released = true;
+        if (voiceAcquired) soundCardUnit.releaseVoice();
+        if (sfxBus) {
+          try {
+            sfxBus.disconnect();
+          } catch {}
+        }
+      }
+    };
+
     try {
       const ctx = this.getContext();
-      const now = ctx.currentTime;
-      
-      let destination: AudioNode = this.getMasterDestination();
-      let delayNode: DelayNode | null = null;
-      let feedbackNode: GainNode | null = null;
+      if (ctx.state === 'suspended') {
+        releaseVoiceOnce();
+        return;
+      }
+      const now = ctx.currentTime + Math.max(0, offsetSec);
+      const masterDest = this.getMasterDestination();
 
+      let destination: AudioNode = masterDest;
       const hasReverb = reverb === true || reverb === 'TEMPLE' || reverb === 'HALLWAY';
       if (hasReverb) {
-        delayNode = ctx.createDelay(1.0);
-        
-        let delayTimeValue = 0.18; // Cavernous temple default
-        let feedbackValue = 0.48;   // Heavy cave decay
-        
-        if (reverb === 'HALLWAY') {
-          delayTimeValue = 0.08;   // High-speed, tighter hallway reflection
-          feedbackValue = 0.32;    // Moderate hardwood/tiled hallway decay
+        const wetBus = reverb === 'HALLWAY' ? this.hallwayReverbBus : this.templeReverbBus;
+        if (wetBus) {
+          sfxBus = ctx.createGain();
+          sfxBus.gain.setValueAtTime(1.0, now);
+          sfxBus.connect(masterDest); // Dry path
+          sfxBus.connect(wetBus);     // Shared wet send bus (zero DelayNode leak)
+          destination = sfxBus;
         }
-        
-        delayNode.delayTime.setValueAtTime(delayTimeValue, now);
-        feedbackNode = ctx.createGain();
-        feedbackNode.gain.setValueAtTime(feedbackValue, now);
-
-        delayNode.connect(feedbackNode);
-        feedbackNode.connect(delayNode);
-        feedbackNode.connect(this.getMasterDestination());
-
-        const sfxBus = ctx.createGain();
-        sfxBus.gain.setValueAtTime(1.0, now);
-        sfxBus.connect(this.getMasterDestination()); // Dry path
-        sfxBus.connect(delayNode);       // Wet path
-
-        destination = sfxBus;
       }
-      
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      
-      osc.connect(gain);
-      gain.connect(destination);
 
-      // Program the 32 SFX mathematical voices with rich, polyphonic frequency layers
+      const attachLifecycle = (node: AudioScheduledSourceNode) => {
+        node.onended = releaseVoiceOnce;
+      };
+
+      const createOscGain = () => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(destination);
+        return { osc, gain };
+      };
+
       switch (id) {
-        case 0: { // Typical Beagle Bark: Ultra-realistic multi-layer baying with 64-bit upsampled frequency resolution
+        case 0: { // Typical Beagle Bark
+          const { osc, gain } = createOscGain();
           const params = BeagleBarkGeneralSFX.parameters;
           osc.type = 'sawtooth';
           osc.frequency.setValueAtTime(this.upsample64Bit(params.base) * pitchModifier, now);
           osc.frequency.exponentialRampToValueAtTime(this.upsample64Bit(params.peak) * pitchModifier, now + 0.05);
           osc.frequency.exponentialRampToValueAtTime(this.upsample64Bit(params.tail) * pitchModifier, now + 0.28);
-          
+
           gain.gain.setValueAtTime(0, now);
           gain.gain.linearRampToValueAtTime(this.volume * 1.1, now + 0.02);
           gain.gain.exponentialRampToValueAtTime(0.01, now + 0.32);
           gain.gain.setValueAtTime(0, now + 0.35);
+          attachLifecycle(osc);
           osc.start(now);
 
-          // High Fidelity Layer: Ultra-realistic air resonance
           const filter = ctx.createBiquadFilter();
           filter.type = 'bandpass';
           filter.frequency.setValueAtTime(this.upsample64Bit(params.resonance) * pitchModifier, now);
           filter.Q.setValueAtTime(1.5, now);
-          
+
           const noise = ctx.createBufferSource();
-          if (this.sharedWhiteNoiseBuffer) {
-            noise.buffer = this.sharedWhiteNoiseBuffer;
-          } else {
-            const bSize = Math.floor(ctx.sampleRate * 0.4);
-            const b = ctx.createBuffer(1, bSize, ctx.sampleRate);
-            const d = b.getChannelData(0);
-            for (let i = 0; i < bSize; i++) d[i] = Math.random() * 2 - 1;
-            noise.buffer = b;
-          }
-          
+          noise.buffer = this.getWhiteNoiseBuffer(ctx);
+          noise.loop = true;
+
           const noiseGain = ctx.createGain();
           noise.connect(filter);
           filter.connect(noiseGain);
@@ -334,17 +368,6 @@ class SynthesizerEngine {
           noise.start(now);
           noise.stop(now + 0.25);
 
-          this.activeSfxCount++;
-          noise.onended = () => {
-            this.activeSfxCount = Math.max(0, this.activeSfxCount - 1);
-            try {
-              noise.disconnect();
-              filter.disconnect();
-              noiseGain.disconnect();
-            } catch {}
-          };
-
-          // Dynamic Voice Synthesis
           const vOscs: OscillatorNode[] = [osc];
           params.voices.forEach(v => {
             const vOsc = ctx.createOscillator();
@@ -360,15 +383,9 @@ class SynthesizerEngine {
             vGain.gain.exponentialRampToValueAtTime(0.001, now + 0.32);
             vGain.gain.setValueAtTime(0, now + 0.35);
             vOsc.start(now);
-            vOsc.onended = () => {
-              try {
-                vOsc.disconnect();
-                vGain.disconnect();
-              } catch {}
-            };
             vOscs.push(vOsc);
           });
-          
+
           vOscs.forEach(o => {
             try {
               o.stop(now + 0.35);
@@ -378,24 +395,24 @@ class SynthesizerEngine {
         }
         case 1: // Soft Paw Step (Left)
         case 2: { // Soft Paw Step (Right)
+          // Streamlined 2-node paw synthesis (1 thud oscillator + 1 filtered surface burst)
+          // Eliminates 10-12 AudioNode churn per stride while preserving exact acoustics.
+          const { osc, gain } = createOscGain();
           const params = BeagleTrotGeneralSFX.parameters;
-          const isFoyer = room === 'FOYER';
+          const roomAcoustics = AcousticsEngine.getRoomProfile(room);
           const isTemple = room === 'TEMPLE';
           const isPorch = room === 'PORCH';
           const isGarden = room === 'GARDEN';
 
-          let padVolume = this.volume * 0.7;
-          let clawVolume = this.volume * 0.25;
+          let padVolume = sfxVol * 0.72 * roomAcoustics.impactGainScale;
           let padDuration = params.envelope.padDuration;
           let clawDuration = params.envelope.clawDuration;
-          
+
           if (isGarden) {
-            padVolume = this.volume * 0.45;
-            clawVolume = this.volume * 0.05;
+            padVolume = sfxVol * 0.48 * roomAcoustics.impactGainScale;
             padDuration = params.envelope.gardenPadDuration;
           } else if (isPorch) {
-            padVolume = this.volume * 0.85;
-            clawVolume = this.volume * 0.12;
+            padVolume = sfxVol * 0.85 * roomAcoustics.impactGainScale;
             padDuration = params.envelope.porchPadDuration;
           }
 
@@ -407,103 +424,55 @@ class SynthesizerEngine {
 
           osc.frequency.setValueAtTime(this.upsample64Bit(baseFreq), now);
           osc.frequency.exponentialRampToValueAtTime(this.upsample64Bit(22), now + padDuration);
-          
+
           gain.gain.setValueAtTime(padVolume, now);
           gain.gain.exponentialRampToValueAtTime(0.001, now + padDuration);
 
-          const oscDigital = ctx.createOscillator();
-          const gainDigital = ctx.createGain();
-          oscDigital.type = 'sine';
-          oscDigital.frequency.setValueAtTime(this.upsample64Bit(baseFreq * 0.85), now + 0.018);
-          oscDigital.frequency.exponentialRampToValueAtTime(this.upsample64Bit(20), now + 0.018 + padDuration);
-          
-          oscDigital.connect(gainDigital);
-          gainDigital.connect(destination);
-          gainDigital.gain.setValueAtTime(0, now);
-          gainDigital.gain.setValueAtTime(padVolume * 0.6, now + 0.018);
-          gainDigital.gain.exponentialRampToValueAtTime(0.001, now + 0.018 + padDuration);
-
           if (isGarden) {
             const noise = ctx.createBufferSource();
-            const bufferSize = ctx.sampleRate * 0.1;
-            const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-            const data = buffer.getChannelData(0);
-            for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
-            noise.buffer = buffer;
-            
+            noise.buffer = this.getWhiteNoiseBuffer(ctx);
+            noise.loop = true;
+
             const noiseFilter = ctx.createBiquadFilter();
             noiseFilter.type = 'lowpass';
-            noiseFilter.frequency.setValueAtTime(this.upsample64Bit(1800), now);
-            
+            noiseFilter.frequency.setValueAtTime(this.upsample64Bit(roomAcoustics.impactBrightnessHz), now);
+
             const noiseGain = ctx.createGain();
             noise.connect(noiseFilter);
             noiseFilter.connect(noiseGain);
             noiseGain.connect(destination);
-            noiseGain.gain.setValueAtTime(this.volume * 0.18, now);
+            noiseGain.gain.setValueAtTime(sfxVol * 0.18 * roomAcoustics.impactGainScale, now);
             noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
             noise.start(now);
+            noise.stop(now + 0.085);
           } else {
             const oscClaw = ctx.createOscillator();
             const gainClaw = ctx.createGain();
             oscClaw.type = isPorch ? 'triangle' : 'sine';
-            
+
             let clawFreq = id === 1 ? params.clawFrequencies.left : params.clawFrequencies.right;
             if (isTemple) clawFreq *= 0.85;
             if (isPorch) clawFreq *= 0.7;
-            
+
             oscClaw.frequency.setValueAtTime(this.upsample64Bit(clawFreq), now);
             oscClaw.frequency.exponentialRampToValueAtTime(this.upsample64Bit(clawFreq * 0.3), now + clawDuration);
-            
+
             oscClaw.connect(gainClaw);
             gainClaw.connect(destination);
-            gainClaw.gain.setValueAtTime(clawVolume, now);
+            gainClaw.gain.setValueAtTime(this.volume * (isPorch ? 0.14 : 0.25), now);
             gainClaw.gain.exponentialRampToValueAtTime(0.001, now + clawDuration);
 
-            // High Fidelity Layer: Indoor surface friction rustle
-            const surfaceNoise = ctx.createBufferSource();
-            const sBufferSize = ctx.sampleRate * 0.05;
-            const sBuffer = ctx.createBuffer(1, sBufferSize, ctx.sampleRate);
-            const sData = sBuffer.getChannelData(0);
-            for (let i = 0; i < sBufferSize; i++) sData[i] = Math.random() * 2 - 1;
-            surfaceNoise.buffer = sBuffer;
-
-            const sFilter = ctx.createBiquadFilter();
-            sFilter.type = 'highpass';
-            sFilter.frequency.setValueAtTime(this.upsample64Bit(isTemple ? 1800 : 2500), now);
-
-            const sGain = ctx.createGain();
-            surfaceNoise.connect(sFilter);
-            sFilter.connect(sGain);
-            sGain.connect(destination);
-            sGain.gain.setValueAtTime(this.volume * 0.12, now);
-            sGain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
-            surfaceNoise.start(now);
-            
-            const oscClaw2 = ctx.createOscillator();
-            const gainClaw2 = ctx.createGain();
-            oscClaw2.type = oscClaw.type;
-            oscClaw2.frequency.setValueAtTime(this.upsample64Bit(clawFreq * 0.9), now + 0.012);
-            oscClaw2.frequency.exponentialRampToValueAtTime(this.upsample64Bit(clawFreq * 0.25), now + 0.012 + clawDuration);
-            
-            oscClaw2.connect(gainClaw2);
-            gainClaw2.connect(destination);
-            gainClaw2.gain.setValueAtTime(0, now);
-            gainClaw2.gain.setValueAtTime(clawVolume * 0.7, now + 0.012);
-            gainClaw2.gain.exponentialRampToValueAtTime(0.001, now + 0.012 + clawDuration);
-            
             oscClaw.start(now);
-            oscClaw2.start(now);
-            oscClaw.stop(now + clawDuration + 0.01);
-            oscClaw2.stop(now + clawDuration + 0.02);
+            oscClaw.stop(now + clawDuration + 0.008);
           }
 
+          attachLifecycle(osc);
           osc.start(now);
-          oscDigital.start(now);
           osc.stop(now + padDuration + 0.02);
-          oscDigital.stop(now + padDuration + 0.03);
           break;
         }
         case 3: { // Beagle Jump Swoosh
+          const { osc, gain } = createOscGain();
           const params = CollisionGeneralSFX.jump;
           osc.type = 'triangle';
           osc.frequency.setValueAtTime(this.upsample64Bit(params.start), now);
@@ -514,11 +483,13 @@ class SynthesizerEngine {
           gain.gain.linearRampToValueAtTime(this.volume * 0.5, now + 0.1);
           gain.gain.exponentialRampToValueAtTime(0.001, now + params.duration);
 
+          attachLifecycle(osc);
           osc.start(now);
           osc.stop(now + params.duration + 0.01);
           break;
         }
         case 4: { // Beagle Landing Thump
+          const { osc, gain } = createOscGain();
           const params = CollisionGeneralSFX.landing;
           osc.type = 'triangle';
           osc.frequency.setValueAtTime(this.upsample64Bit(params.start), now);
@@ -527,11 +498,13 @@ class SynthesizerEngine {
           gain.gain.setValueAtTime(this.volume * 0.9, now);
           gain.gain.exponentialRampToValueAtTime(0.001, now + params.duration);
 
+          attachLifecycle(osc);
           osc.start(now);
           osc.stop(now + params.duration + 0.01);
           break;
         }
         case 5: { // Happy Whimper
+          const { osc, gain } = createOscGain();
           const params = BeagleWhimperGeneralSFX.parameters;
           osc.type = 'sine';
           osc.frequency.setValueAtTime(this.upsample64Bit(params.base) * pitchModifier, now);
@@ -542,11 +515,13 @@ class SynthesizerEngine {
           gain.gain.linearRampToValueAtTime(this.volume * 0.3, now + 0.05);
           gain.gain.exponentialRampToValueAtTime(0.001, now + params.duration + 0.04);
 
+          attachLifecycle(osc);
           osc.start(now);
           osc.stop(now + params.duration + 0.05);
           break;
         }
         case 6: { // Collar Jingle
+          const { osc, gain } = createOscGain();
           const params = BeagleCollarGraspGeneralSFX.parameters;
           osc.type = 'sine';
           osc.frequency.setValueAtTime(this.upsample64Bit(params.jingle.oscFreq), now);
@@ -562,6 +537,7 @@ class SynthesizerEngine {
           gainSub.gain.setValueAtTime(this.volume * 0.2, now);
           gainSub.gain.exponentialRampToValueAtTime(0.01, now + 0.09);
 
+          attachLifecycle(osc);
           osc.start(now);
           oscSub.start(now);
           osc.stop(now + params.jingle.duration);
@@ -569,6 +545,7 @@ class SynthesizerEngine {
           break;
         }
         case 7: { // Diamond Sparkle
+          const { osc, gain } = createOscGain();
           const params = BeagleCollarGraspGeneralSFX.parameters;
           osc.type = 'sine';
           osc.frequency.setValueAtTime(this.upsample64Bit(params.sparkle.freqs[0]), now);
@@ -580,11 +557,13 @@ class SynthesizerEngine {
           gain.gain.linearRampToValueAtTime(this.volume * 0.3, now + 0.02);
           gain.gain.exponentialRampToValueAtTime(0.001, now + params.sparkle.duration);
 
+          attachLifecycle(osc);
           osc.start(now);
           osc.stop(now + params.sparkle.duration + 0.02);
           break;
         }
         case 8: { // Fur Pet Rustle
+          const { osc, gain } = createOscGain();
           const params = BeaglePettingGeneralSFX.parameters;
           osc.type = 'triangle';
           osc.frequency.setValueAtTime(this.upsample64Bit(params.short.freqs[0]), now);
@@ -594,11 +573,13 @@ class SynthesizerEngine {
           gain.gain.setValueAtTime(this.volume * 0.4, now);
           gain.gain.exponentialRampToValueAtTime(0.001, now + params.short.duration);
 
+          attachLifecycle(osc);
           osc.start(now);
           osc.stop(now + params.short.duration + 0.01);
           break;
         }
         case 9: { // Springy Wall Collision
+          const { osc, gain } = createOscGain();
           const params = CollisionGeneralSFX.wall;
           osc.type = 'sawtooth';
           osc.frequency.setValueAtTime(this.upsample64Bit(params.osc1.start), now);
@@ -620,6 +601,7 @@ class SynthesizerEngine {
           gain2.gain.setValueAtTime(this.volume * 0.35, now);
           gain2.gain.exponentialRampToValueAtTime(0.001, now + params.duration);
 
+          attachLifecycle(osc);
           osc.start(now);
           osc2.start(now);
           osc.stop(now + params.duration + 0.05);
@@ -627,86 +609,91 @@ class SynthesizerEngine {
           break;
         }
         case 10: { // Blue Tile Step
+          const { osc, gain } = createOscGain();
           const params = TileGeneralSFX.blue;
           osc.type = 'sine';
           osc.frequency.setValueAtTime(this.upsample64Bit(params.base), now);
           osc.frequency.linearRampToValueAtTime(this.upsample64Bit(params.end), now + 0.08);
-          
+
           gain.gain.setValueAtTime(this.volume * 0.6, now);
           gain.gain.exponentialRampToValueAtTime(0.001, now + params.duration);
-          
+
           const oscRes = ctx.createOscillator();
           const gainRes = ctx.createGain();
           oscRes.type = 'triangle';
           oscRes.frequency.setValueAtTime(this.upsample64Bit(params.res), now);
           oscRes.frequency.linearRampToValueAtTime(this.upsample64Bit(params.res * 0.75), now + 0.08);
-          
+
           oscRes.connect(gainRes);
           gainRes.connect(destination);
           gainRes.gain.setValueAtTime(this.volume * 0.3, now);
           gainRes.gain.exponentialRampToValueAtTime(0.001, now + params.duration);
-          
+
           const oscGloss = ctx.createOscillator();
           const gainGloss = ctx.createGain();
           oscGloss.type = 'sine';
           oscGloss.frequency.setValueAtTime(this.upsample64Bit(params.gloss), now);
           oscGloss.frequency.linearRampToValueAtTime(this.upsample64Bit(params.gloss * 0.75), now + 0.05);
-          
+
           oscGloss.connect(gainGloss);
           gainGloss.connect(destination);
           gainGloss.gain.setValueAtTime(this.volume * 0.15, now);
           gainGloss.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
 
+          attachLifecycle(osc);
           osc.start(now);
           oscRes.start(now);
           oscGloss.start(now);
-          
+
           osc.stop(now + params.duration + 0.02);
           oscRes.stop(now + params.duration + 0.02);
           oscGloss.stop(now + 0.08);
           break;
         }
         case 11: { // Green Tile Step
+          const { osc, gain } = createOscGain();
           const params = TileGeneralSFX.green;
           osc.type = 'sine';
           osc.frequency.setValueAtTime(this.upsample64Bit(params.base), now);
           osc.frequency.linearRampToValueAtTime(this.upsample64Bit(params.end), now + 0.08);
-          
+
           gain.gain.setValueAtTime(this.volume * 0.6, now);
           gain.gain.exponentialRampToValueAtTime(0.001, now + params.duration);
-          
+
           const oscRes = ctx.createOscillator();
           const gainRes = ctx.createGain();
           oscRes.type = 'triangle';
           oscRes.frequency.setValueAtTime(this.upsample64Bit(params.res), now);
           oscRes.frequency.linearRampToValueAtTime(this.upsample64Bit(params.res * 0.75), now + 0.08);
-          
+
           oscRes.connect(gainRes);
           gainRes.connect(destination);
           gainRes.gain.setValueAtTime(this.volume * 0.3, now);
           gainRes.gain.exponentialRampToValueAtTime(0.001, now + params.duration);
-          
+
           const oscGloss = ctx.createOscillator();
           const gainGloss = ctx.createGain();
           oscGloss.type = 'sine';
           oscGloss.frequency.setValueAtTime(this.upsample64Bit(params.gloss), now);
           oscGloss.frequency.linearRampToValueAtTime(this.upsample64Bit(params.gloss * 0.75), now + 0.05);
-          
+
           oscGloss.connect(gainGloss);
           gainGloss.connect(destination);
           gainGloss.gain.setValueAtTime(this.volume * 0.15, now);
           gainGloss.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
 
+          attachLifecycle(osc);
           osc.start(now);
           oscRes.start(now);
           oscGloss.start(now);
-          
+
           osc.stop(now + params.duration + 0.02);
           oscRes.stop(now + params.duration + 0.02);
           oscGloss.stop(now + 0.08);
           break;
         }
-        case 12: { // RESERVED_64BIT_PRECISION_SLOT: Restored Dual-Tone Confirmations
+        case 12: { // Dual-Tone Confirmations
+          const { osc, gain } = createOscGain();
           const dt = DualToneGeneralRegistry.parameters.confirmation;
           osc.type = 'sine';
           osc.frequency.setValueAtTime(this.upsample64Bit(dt.freq1), now);
@@ -715,11 +702,13 @@ class SynthesizerEngine {
           gain.gain.setValueAtTime(this.volume * 0.4, now);
           gain.gain.exponentialRampToValueAtTime(0.01, now + dt.duration);
 
+          attachLifecycle(osc);
           osc.start(now);
           osc.stop(now + dt.duration + 0.01);
           break;
         }
         case 13: { // Height Elevation Whoosh - Transition Tone
+          const { osc, gain } = createOscGain();
           const params = SingleToneGeneralRegistry.parameters.doorTransition;
           osc.type = params.wave as OscillatorType;
           osc.frequency.setValueAtTime(this.upsample64Bit(params.frequency), now);
@@ -728,72 +717,73 @@ class SynthesizerEngine {
           gain.gain.setValueAtTime(this.volume * 0.25, now);
           gain.gain.exponentialRampToValueAtTime(0.001, now + params.duration);
 
+          attachLifecycle(osc);
           osc.start(now);
           osc.stop(now + params.duration + 0.02);
           break;
         }
         case 14: { // Corridor Reverb Echo
+          const { osc, gain } = createOscGain();
           const params = AmbienceGeneralSFX.parameters.portal;
           osc.type = 'triangle';
           osc.frequency.setValueAtTime(this.upsample64Bit(params.frequency), now);
-          
+
           gain.gain.setValueAtTime(0, now);
           params.steps.forEach(step => {
             gain.gain.setValueAtTime(this.volume * step.vol, now + step.time);
           });
           gain.gain.exponentialRampToValueAtTime(0.001, now + params.duration);
- 
+
+          attachLifecycle(osc);
           osc.start(now);
           osc.stop(now + params.duration + 0.01);
           break;
         }
         case 15: { // Deep Foyer Rumble
+          const { osc, gain } = createOscGain();
           const params = AmbienceGeneralSFX.parameters.rumble;
           osc.type = 'sine';
           osc.frequency.setValueAtTime(this.upsample64Bit(params.frequency), now);
           gain.gain.setValueAtTime(this.volume * 0.8, now);
           gain.gain.exponentialRampToValueAtTime(0.001, now + params.duration);
- 
+
+          attachLifecycle(osc);
           osc.start(now);
           osc.stop(now + params.duration + 0.01);
           break;
         }
-        case 16: { // Fur Stroking Rustle (Long)
+        case 16: { // Fur Stroking Rustle (Long) — reuses shared whiteNoiseBuffer with zero dangling osc
           const params = BeaglePettingGeneralSFX.parameters;
-          const bufferSize = ctx.sampleRate * params.long.duration;
-          const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-          const data = buffer.getChannelData(0);
-          for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
-          
           const noise = ctx.createBufferSource();
-          noise.buffer = buffer;
-          
+          noise.buffer = this.getWhiteNoiseBuffer(ctx);
+          noise.loop = true;
+
           const filter = ctx.createBiquadFilter();
           filter.type = 'lowpass';
           filter.frequency.setValueAtTime(this.upsample64Bit(params.long.filterStart), now);
           filter.frequency.exponentialRampToValueAtTime(this.upsample64Bit(params.long.filterMid), now + 0.25);
           filter.frequency.exponentialRampToValueAtTime(this.upsample64Bit(params.long.filterEnd), now + 0.5);
-          
+
           const g = ctx.createGain();
           noise.connect(filter);
           filter.connect(g);
           g.connect(destination);
-          
+
           g.gain.setValueAtTime(0, now);
           g.gain.linearRampToValueAtTime(this.volume * 0.3, now + 0.1);
           g.gain.linearRampToValueAtTime(this.volume * 0.2, now + 0.3);
           g.gain.exponentialRampToValueAtTime(0.001, now + params.long.duration);
-          
+
+          attachLifecycle(noise);
           noise.start(now);
           noise.stop(now + params.long.duration);
           break;
         }
-        case 17: { // High-Fidelity Gallop Scuff (Dual-impact scuff)
+        case 17: { // Gallop Scuff (Dual-impact scuff) — reuses shared whiteNoiseBuffer with zero dangling osc
           const params = BeagleGallopGeneralSFX.parameters;
           const isFoyer = room === 'FOYER';
           const isTemple = room === 'TEMPLE';
-          
-          // Heavy body impact (Low thud)
+
           const thud = ctx.createOscillator();
           const thudGain = ctx.createGain();
           thud.type = 'triangle';
@@ -803,26 +793,23 @@ class SynthesizerEngine {
           thudGain.connect(destination);
           thudGain.gain.setValueAtTime(this.volume * 0.8, now);
           thudGain.gain.exponentialRampToValueAtTime(0.001, now + params.thud.duration);
-          
-          // Scuff noise (High-freq scrape)
+
           const noise = ctx.createBufferSource();
-          const bSize = ctx.sampleRate * params.scuff.duration;
-          const b = ctx.createBuffer(1, bSize, ctx.sampleRate);
-          const d = b.getChannelData(0);
-          for (let i = 0; i < bSize; i++) d[i] = Math.random() * 2 - 1;
-          noise.buffer = b;
-          
+          noise.buffer = this.getWhiteNoiseBuffer(ctx);
+          noise.loop = true;
+
           const nFilter = ctx.createBiquadFilter();
           nFilter.type = isFoyer || isTemple ? 'highpass' : 'bandpass';
           nFilter.frequency.setValueAtTime(this.upsample64Bit(isFoyer || isTemple ? params.scuff.foyerFreq : params.scuff.gardenFreq), now);
-          
+
           const nGain = ctx.createGain();
           noise.connect(nFilter);
           nFilter.connect(nGain);
           nGain.connect(destination);
           nGain.gain.setValueAtTime(this.volume * 0.4, now);
           nGain.gain.exponentialRampToValueAtTime(0.001, now + params.scuff.duration);
-          
+
+          attachLifecycle(thud);
           thud.start(now);
           noise.start(now);
           thud.stop(now + params.thud.duration + 0.01);
@@ -830,6 +817,7 @@ class SynthesizerEngine {
           break;
         }
         default: {
+          const { osc, gain } = createOscGain();
           const pitchFactor = 1 + (id % 8) * 0.15;
           osc.type = id % 2 === 0 ? 'sine' : 'triangle';
           osc.frequency.setValueAtTime(300 * pitchFactor, now);
@@ -838,32 +826,131 @@ class SynthesizerEngine {
           gain.gain.setValueAtTime(this.volume * 0.4, now);
           gain.gain.exponentialRampToValueAtTime(0.01, now + 0.18);
 
+          attachLifecycle(osc);
           osc.start(now);
           osc.stop(now + 0.20);
           break;
         }
       }
     } catch (e) {
+      releaseVoiceOnce();
       console.warn('Could not play synthesized sound:', e);
     }
   }
 
-  public startBGM(presetId: number) {
-    this.activeBgmId = presetId;
+  /**
+   * Consolidated 4-beat gallop stride scheduler: creates 4 compact beats inside a single voice slot
+   * instead of spawning 60+ Web Audio nodes in a single frame.
+   */
+  public playGallopCycle(
+    reverb: 'TEMPLE' | 'HALLWAY' | 'NONE' = 'NONE',
+    room: 'FOYER' | 'GARDEN' | 'PORCH' | 'TEMPLE' = 'FOYER'
+  ): void {
     if (this.isMutedValue) return;
+    if (!soundCardUnit.requestVoice()) return;
 
+    const sfxVol = this.getChannelVolume('sfx');
+    let released = false;
+    let sfxBus: GainNode | null = null;
+    const releaseOnce = () => {
+      if (!released) {
+        released = true;
+        soundCardUnit.releaseVoice();
+        if (sfxBus) {
+          try { sfxBus.disconnect(); } catch {}
+        }
+      }
+    };
+
+    try {
+      const ctx = this.getContext();
+      if (ctx.state === 'suspended') {
+        releaseOnce();
+        return;
+      }
+      const baseTime = ctx.currentTime;
+      const masterDest = this.getMasterDestination();
+      let destination: AudioNode = masterDest;
+
+      if (reverb === 'TEMPLE' || reverb === 'HALLWAY') {
+        const wetBus = reverb === 'HALLWAY' ? this.hallwayReverbBus : this.templeReverbBus;
+        if (wetBus) {
+          sfxBus = ctx.createGain();
+          sfxBus.gain.setValueAtTime(1.0, baseTime);
+          sfxBus.connect(masterDest);
+          sfxBus.connect(wetBus);
+          destination = sfxBus;
+        }
+      }
+
+      const params = BeagleGallopGeneralSFX.parameters;
+      const trotParams = BeagleTrotGeneralSFX.parameters;
+      const roomAcoustics = AcousticsEngine.getRoomProfile(room);
+      const beatOffsets = [0, 0.06, 0.12, 0.18];
+      const baseVol = sfxVol * (room === 'GARDEN' ? 0.52 : 0.78) * roomAcoustics.impactGainScale;
+
+      for (let i = 0; i < 4; i++) {
+        const t = baseTime + beatOffsets[i];
+        const thud = ctx.createOscillator();
+        const thudGain = ctx.createGain();
+        thud.type = 'triangle';
+        const fStart = (i & 1) === 0 ? trotParams.baseFrequencies.left : trotParams.baseFrequencies.right;
+        thud.frequency.setValueAtTime(fStart * 1.15, t);
+        thud.frequency.exponentialRampToValueAtTime(params.thud.freqEnd, t + params.thud.duration);
+        thud.connect(thudGain);
+        thudGain.connect(destination);
+        thudGain.gain.setValueAtTime(baseVol, t);
+        thudGain.gain.exponentialRampToValueAtTime(0.001, t + params.thud.duration);
+        if (i === 3) {
+          thud.onended = releaseOnce;
+        }
+        thud.start(t);
+        thud.stop(t + params.thud.duration + 0.01);
+      }
+    } catch {
+      releaseOnce();
+    }
+  }
+
+  /**
+   * Starts procedural Garden BGM using a sample-accurate Web Audio currentTime lookahead scheduler.
+   * Eliminates wall-clock setInterval tempo slowing/stuttering during heavy render frames.
+   */
+  public startBGM(presetId: number) {
+    if (this.isMutedValue) {
+      this.activeBgmId = presetId;
+      return;
+    }
+    if (this.bgmIntervalId !== null && this.activeBgmId === presetId) {
+      return;
+    }
+
+    this.activeBgmId = presetId;
     this.stopBGM();
-    
+
     try {
       const ctx = this.getContext();
       const tempo = BGMGeneralRegistry.tempo;
-      const intervalMs = (60 / tempo) * 1000 * 0.5;
-      
+      const stepSec = (60 / tempo) * 0.5;
+      const lookaheadSec = 0.12;
+
       this.currentStep = 0;
-      
-      this.bgmIntervalId = setInterval(() => {
-        this.playBgmStep(ctx, presetId);
-      }, intervalMs);
+      this.nextBgmNoteTime = ctx.currentTime + 0.02;
+
+      const scheduleWindow = () => {
+        if (this.isMutedValue || ctx.state === 'suspended') return;
+        // Clamp runaway catch-up if tab was backgrounded
+        if (this.nextBgmNoteTime < ctx.currentTime - 0.1) {
+          this.nextBgmNoteTime = ctx.currentTime + 0.02;
+        }
+        while (this.nextBgmNoteTime < ctx.currentTime + lookaheadSec) {
+          this.playBgmStep(ctx, presetId, this.nextBgmNoteTime);
+          this.nextBgmNoteTime += stepSec;
+        }
+      };
+
+      scheduleWindow();
+      this.bgmIntervalId = setInterval(scheduleWindow, 45);
     } catch (e) {
       console.warn('Could not launch procedural background music:', e);
     }
@@ -876,18 +963,18 @@ class SynthesizerEngine {
     }
   }
 
-  private playBgmStep(ctx: AudioContext, presetId: number) {
+  private playBgmStep(ctx: AudioContext, presetId: number, scheduledTime?: number) {
     if (this.isMutedValue) return;
-    this.currentPlayingType = 'bgm';
-    const now = ctx.currentTime;
-    
+    const bgmVol = this.getChannelVolume('bgm');
+    const now = scheduledTime !== undefined ? scheduledTime : ctx.currentTime;
+
     const cMajor = BGMGeneralRegistry.scales.cMajor;
     const pentatonic = BGMGeneralRegistry.scales.pentatonic;
-    
+
     let noteIndex = 0;
     let waveType: OscillatorType = 'sine';
     let filterFreq = 1200;
-    let noteVolume = this.volume * 0.15;
+    let noteVolume = bgmVol * 0.15;
     
     const step = this.currentStep;
     
@@ -907,26 +994,29 @@ class SynthesizerEngine {
       case 1:
         noteIndex = (step * 3 + (step % 3 === 0 ? 5 : 2)) % cMajor.length;
         waveType = 'sine';
-        noteVolume = this.volume * 0.22;
+        noteVolume = bgmVol * 0.22;
         break;
 
       case 2:
         noteIndex = (10 + (step * 7) % 6) % pentatonic.length;
         waveType = 'sine';
-        noteVolume = this.volume * 0.12;
+        noteVolume = bgmVol * 0.12;
         break;
 
       case 3:
         noteIndex = (step % 4 === 0 ? 0 : step % 3 === 1 ? 4 : 2);
         waveType = 'triangle';
-        noteVolume = this.volume * 0.28;
+        noteVolume = bgmVol * 0.28;
         break;
 
       case 4:
-        if (step % 4 !== 0) return;
+        if (step % 4 !== 0) {
+          this.currentStep++;
+          return;
+        }
         noteIndex = (step % 12) % cMajor.length;
         waveType = 'sine';
-        noteVolume = this.volume * 0.25;
+        noteVolume = bgmVol * 0.25;
         break;
 
       case 5:
@@ -998,31 +1088,35 @@ class SynthesizerEngine {
         });
       }
 
-      chordVoices.forEach(voice => {
+      const bgmDest = this.bgmFilter || this.getMasterDestination();
+      if (this.bgmFilter) {
+        this.bgmFilter.frequency.setValueAtTime(filterFreq, now);
+      }
+
+      for (let i = 0; i < chordVoices.length; i++) {
+        const voice = chordVoices[i];
         try {
           const osc = ctx.createOscillator();
           const gainNode = ctx.createGain();
-          const biquadFilter = ctx.createBiquadFilter();
 
           osc.type = voice.type;
           osc.frequency.setValueAtTime(voice.frequency, now + voice.delay);
 
-          biquadFilter.type = 'lowpass';
-          biquadFilter.frequency.setValueAtTime(filterFreq, now + voice.delay);
-
-          osc.connect(biquadFilter);
-          biquadFilter.connect(gainNode);
-          gainNode.connect(this.getMasterDestination());
+          osc.connect(gainNode);
+          gainNode.connect(bgmDest);
 
           const currentVol = noteVolume * voice.volumeFactor;
           gainNode.gain.setValueAtTime(0, now + voice.delay);
           gainNode.gain.linearRampToValueAtTime(currentVol, now + voice.delay + 0.04);
           gainNode.gain.exponentialRampToValueAtTime(0.001, now + voice.delay + voice.duration - 0.02);
 
+          osc.onended = () => {
+            try { gainNode.disconnect(); } catch {}
+          };
           osc.start(now + voice.delay);
           osc.stop(now + voice.delay + voice.duration);
         } catch (_) {}
-      });
+      }
     } catch (_) {}
 
     this.currentStep++;

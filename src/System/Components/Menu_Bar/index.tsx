@@ -17,10 +17,10 @@ interface MenuBarProps {
   onTakeScreenshot: (format: 'png' | 'jpg') => void;
 }
 
-export const MenuBar: React.FC<MenuBarProps> = ({ settings, onUpdateSettings, onTakeScreenshot }) => {
+export const MenuBar: React.FC<MenuBarProps> = React.memo(({ settings, onUpdateSettings, onTakeScreenshot }) => {
   return (
     <div className="w-full flex justify-center py-4">
       <CraftedMenuBar settings={settings} onUpdateSettings={onUpdateSettings} onTakeScreenshot={onTakeScreenshot} />
     </div>
   );
-};
+});

@@ -12,28 +12,37 @@ import { CConfig, DEFAULT_C_CONFIG } from "./General/index";
  */
 export class CController {
   private config: CConfig = { ...DEFAULT_C_CONFIG };
-  private arenaBuffer: Uint8Array = new Uint8Array(64 * 1024); // 64 KB pre-allocated linear arena
+  private arenaBuffer: Uint8Array | null = null;
   private arenaOffset: number = 0;
+
+  private ensureArena(): Uint8Array {
+    if (!this.arenaBuffer) {
+      this.arenaBuffer = new Uint8Array(64 * 1024); // Lazy 64 KB linear arena
+    }
+    return this.arenaBuffer;
+  }
 
   public getStatus() {
     return { 
       module: "C", 
       active: true, 
       config: this.config,
-      arenaCapacityBytes: this.arenaBuffer.length,
+      arenaCapacityBytes: this.arenaBuffer ? this.arenaBuffer.length : 0,
       arenaUsedBytes: this.arenaOffset
     };
   }
 
   /**
-   * Linear Arena Allocation: O(1) allocation with zero GC garbage.
+   * Linear Arena Allocation: O(1) allocation with zero GC garbage once warmed.
    */
   public arenaAlloc(byteLength: number): Uint8Array {
-    const alignedSize = (byteLength + 3) & ~3; // 4-byte alignment
-    if (this.arenaOffset + alignedSize > this.arenaBuffer.length) {
+    const arena = this.ensureArena();
+    const safeBytes = Math.max(0, Math.min(arena.length, byteLength | 0));
+    const alignedSize = (safeBytes + 3) & ~3; // 4-byte alignment
+    if (this.arenaOffset + alignedSize > arena.length) {
       this.arenaOffset = 0; // Deterministic cyclic reset
     }
-    const view = this.arenaBuffer.subarray(this.arenaOffset, this.arenaOffset + byteLength);
+    const view = arena.subarray(this.arenaOffset, this.arenaOffset + safeBytes);
     this.arenaOffset += alignedSize;
     return view;
   }

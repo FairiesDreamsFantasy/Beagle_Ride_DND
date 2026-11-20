@@ -12,15 +12,22 @@ import { CConfig, DEFAULT_C_CONFIG } from "./General/index";
  */
 export class VisualsAssemblyCController {
   private config: CConfig = { ...DEFAULT_C_CONFIG };
-  private arena: Uint8Array = new Uint8Array(1024 * 64); // 64KB static arena
+  private arena: Uint8Array | null = null;
   private arenaOffset: number = 0;
+
+  private ensureArena(): Uint8Array {
+    if (!this.arena) {
+      this.arena = new Uint8Array(1024 * 64); // Lazy 64KB static arena
+    }
+    return this.arena;
+  }
 
   public getStatus() {
     return { 
       module: "VisualsAssemblyC", 
       active: true, 
       config: this.config, 
-      arenaSize: this.arena.length,
+      arenaSize: this.arena ? this.arena.length : 0,
       arenaUsed: this.arenaOffset
     };
   }
@@ -29,18 +36,20 @@ export class VisualsAssemblyCController {
    * Packs RGBA components into a 32-bit integer for buffer blitting.
    */
   public packPixel(r: number, g: number, b: number, a: number = 255): number {
-    return ((a & 0xFF) << 24) | ((b & 0xFF) << 16) | ((g & 0xFF) << 8) | (r & 0xFF);
+    return (((a & 0xFF) << 24) | ((b & 0xFF) << 16) | ((g & 0xFF) << 8) | (r & 0xFF)) >>> 0;
   }
 
   /**
    * Linear arena allocation for transient vertex arrays (O(1)).
    */
   public malloc(bytes: number): Uint8Array {
-    if (this.arenaOffset + bytes > this.arena.length) {
+    const arena = this.ensureArena();
+    const safeBytes = Math.max(0, Math.min(arena.length, bytes | 0));
+    if (this.arenaOffset + safeBytes > arena.length) {
       this.arenaOffset = 0; // Cyclic reset for transient data
     }
-    const view = this.arena.subarray(this.arenaOffset, this.arenaOffset + bytes);
-    this.arenaOffset += bytes;
+    const view = arena.subarray(this.arenaOffset, this.arenaOffset + safeBytes);
+    this.arenaOffset += safeBytes;
     return view;
   }
 

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  * 
  * System/Accessibility/General/index.tsx
- * Ultra-Scientific Accessibility & Auditory Navigation Engine (5000^1000000% Factor)
+ * Accessibility & Auditory Navigation Engine
  * Protected under the 1999.999999999999% Hardening Mandate.
  */
 
@@ -35,6 +35,7 @@ export class SystemAccessibilityGeneral {
   private lastSpokenTimestamp: number = 0;
   private readonly debounceThresholdMs: number = 180; // High-precision 180ms window prevents OS IPC thrashing
   private isSpeaking: boolean = false;
+  private pendingSpeakTimer: ReturnType<typeof setTimeout> | null = null;
 
   private constructor() {
     // Singleton architecture for single-channel auditory management
@@ -51,6 +52,10 @@ export class SystemAccessibilityGeneral {
    * Instantly silences ongoing speech synthesis with zero-redundancy cancellation check.
    */
   public silence(): void {
+    if (this.pendingSpeakTimer !== null) {
+      clearTimeout(this.pendingSpeakTimer);
+      this.pendingSpeakTimer = null;
+    }
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       // Only invoke OS speech cancel if actively speaking or pending to prevent redundant IPC context switches
       if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
@@ -66,7 +71,7 @@ export class SystemAccessibilityGeneral {
 
   /**
    * Evaluates and speaks an utterance through browser speech synthesis.
-   * Guarantees zero speech overlap, zero IPC thread stutter, and 80,000% spike reduction.
+   * Uses debounce, rate limiting, and micro-coalesced dispatch after cancel() to prevent speech IPC stalls.
    */
   public speak(text: string, force = false): boolean {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
@@ -86,31 +91,45 @@ export class SystemAccessibilityGeneral {
       return false;
     }
 
+    const wasBusy = window.speechSynthesis.speaking || window.speechSynthesis.pending;
     this.silence();
+    this.lastSpokenText = text;
+    this.lastSpokenTimestamp = now;
 
-    try {
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = this.config.rate;
-      utterance.pitch = this.config.pitch;
-      utterance.volume = this.config.volume;
+    const dispatchUtterance = () => {
+      try {
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = this.config.rate;
+        utterance.pitch = this.config.pitch;
+        utterance.volume = this.config.volume;
 
-      utterance.onstart = () => {
-        this.isSpeaking = true;
-      };
-      utterance.onend = () => {
+        utterance.onstart = () => {
+          this.isSpeaking = true;
+        };
+        utterance.onend = () => {
+          this.isSpeaking = false;
+        };
+        utterance.onerror = () => {
+          this.isSpeaking = false;
+        };
+
+        window.speechSynthesis.speak(utterance);
+      } catch {
         this.isSpeaking = false;
-      };
-      utterance.onerror = () => {
-        this.isSpeaking = false;
-      };
+      }
+    };
 
-      window.speechSynthesis.speak(utterance);
-      this.lastSpokenText = text;
-      this.lastSpokenTimestamp = now;
-      return true;
-    } catch {
-      return false;
+    // Deferring speak by 16ms after cancel() prevents Chromium synchronous cancel()+speak() queue deadlock
+    if (wasBusy) {
+      this.pendingSpeakTimer = setTimeout(() => {
+        this.pendingSpeakTimer = null;
+        dispatchUtterance();
+      }, 16);
+    } else {
+      dispatchUtterance();
     }
+
+    return true;
   }
 
   /**

@@ -50,10 +50,21 @@ export class ScientificBootController {
   }
 
   /**
-   * Validates the final stability of the system against the 12-decimal threshold.
+   * Validates deterministic stability of the system using clock monotonicity and boot budget compliance.
    */
   public validateStability(): boolean {
-    const success = Math.random() < GameBootGeneralConfig.stabilitiyThreshold; // Simulated for logic demonstration
+    const now = performance.now();
+    const totalBootMs = this.startTime > 0 ? Math.max(0, now - this.startTime) : 0;
+    let monotonic = true;
+    let prev = -1;
+    for (const ts of this.telemetryData.values()) {
+      if (!Number.isFinite(ts) || ts < prev) {
+        monotonic = false;
+        break;
+      }
+      prev = ts;
+    }
+    const success = monotonic && totalBootMs <= GameBootGeneralConfig.maxBootTimeMs;
     this.currentPhase = success ? 'STABLE' : 'DEGRADED';
     return success;
   }

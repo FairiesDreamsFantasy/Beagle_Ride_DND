@@ -5,3 +5,5 @@
 
 export * from "./Physics/index";
 export * from "./Graphical_Renderer/index";
+export * from "./Acoustics/index";
+

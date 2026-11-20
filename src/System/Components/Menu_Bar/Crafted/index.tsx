@@ -18,7 +18,7 @@ interface CraftedMenuBarProps {
   onTakeScreenshot: (format: 'png' | 'jpg') => void;
 }
 
-export const CraftedMenuBar: React.FC<CraftedMenuBarProps> = ({ settings, onUpdateSettings, onTakeScreenshot }) => {
+export const CraftedMenuBar: React.FC<CraftedMenuBarProps> = React.memo(({ settings, onUpdateSettings, onTakeScreenshot }) => {
   const [activeMenu, setActiveMenu] = useState<'TOOLBOX' | 'VIEW' | 'ACCESSIBILITY' | 'HELP' | null>(null);
   
   const menuRef = useRef<HTMLDivElement>(null);
@@ -40,38 +40,51 @@ export const CraftedMenuBar: React.FC<CraftedMenuBarProps> = ({ settings, onUpda
           e.preventDefault();
           e.stopPropagation();
           setActiveMenu(null);
+          return;
         }
  
         if (e.key === 'ArrowRight') {
           e.preventDefault();
           e.stopPropagation();
-          const currentIndex = menuItems.indexOf(activeMenu as any);
+          const currentIndex = menuItems.indexOf(activeMenu);
           const nextIndex = (currentIndex + 1) % menuItems.length;
           setActiveMenu(menuItems[nextIndex]);
           const nextBtn = document.getElementById(`menu-${menuItems[nextIndex].toLowerCase()}`);
           nextBtn?.focus();
+          return;
         }
  
         if (e.key === 'ArrowLeft') {
           e.preventDefault();
           e.stopPropagation();
-          const currentIndex = menuItems.indexOf(activeMenu as any);
+          const currentIndex = menuItems.indexOf(activeMenu);
           const prevIndex = (currentIndex - 1 + menuItems.length) % menuItems.length;
           setActiveMenu(menuItems[prevIndex]);
           const prevBtn = document.getElementById(`menu-${menuItems[prevIndex].toLowerCase()}`);
           prevBtn?.focus();
+          return;
         }
  
-        // Prevent game interaction when menu is active
-        if (['ArrowUp', 'ArrowDown', ' ', 'Enter'].includes(e.key)) {
+        // Prevent game interaction while a dropdown menu is active, leaving Enter functional for focused controls
+        if (['ArrowUp', 'ArrowDown', ' '].includes(e.key)) {
           e.preventDefault();
           e.stopPropagation();
         }
       }
     };
 
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (activeMenu && menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setActiveMenu(null);
+      }
+    };
+
     window.addEventListener('keydown', handleGlobalKeyDown, true);
-    return () => window.removeEventListener('keydown', handleGlobalKeyDown, true);
+    window.addEventListener('mousedown', handleOutsideClick);
+    return () => {
+      window.removeEventListener('keydown', handleGlobalKeyDown, true);
+      window.removeEventListener('mousedown', handleOutsideClick);
+    };
   }, [activeMenu]);
 
   const toggleMenu = (menu: typeof activeMenu) => {
@@ -84,7 +97,7 @@ export const CraftedMenuBar: React.FC<CraftedMenuBarProps> = ({ settings, onUpda
       ref={menuRef} 
       role="toolbar"
       aria-label="Game Menu Bar"
-      className="flex items-center space-x-4 bg-slate-900/80 backdrop-blur-xl px-6 py-2 rounded-full border border-slate-800 shadow-2xl relative"
+      className="flex items-center space-x-4 bg-slate-900/95 px-6 py-2 rounded-full border border-slate-800 shadow-2xl relative"
     >
       <div className="relative" role="none">
         <button 
@@ -162,11 +175,13 @@ export const CraftedMenuBar: React.FC<CraftedMenuBarProps> = ({ settings, onUpda
  
       <button 
         id="menu-help"
+        aria-pressed={activeMenu === 'HELP'}
         aria-label="Help information"
-        className="text-xs font-mono text-slate-400 hover:text-white transition-colors"
+        onClick={() => toggleMenu('HELP')}
+        className={`text-xs font-mono transition-colors ${activeMenu === 'HELP' ? 'text-white underline decoration-green-500 underline-offset-4' : 'text-slate-400 hover:text-white'}`}
       >
         HELP
       </button>
     </div>
   );
-};
+});
